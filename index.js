@@ -1,4 +1,4 @@
-const { makeWASocket, useSingleFileAuthState, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
+const { useSingleFileAuthState, makeWASocket, fetchLatestBaileysVersion } = require("@whiskeysockets/baileys");
 const express = require("express");
 const axios = require("axios");
 const P = require("pino");
@@ -46,4 +46,3 @@ startBot();
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => console.log(`🚀 Express сервер запущен на порту ${port}`));
-
