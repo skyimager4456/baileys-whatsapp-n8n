@@ -1,49 +1,36 @@
-const {
-  makeWASocket,
-  useMultiFileAuthState,
-  fetchLatestBaileysVersion
-} = require("@whiskeysockets/baileys");
 const express = require("express");
 const axios = require("axios");
-const P = require("pino");
-
+const { makeWASocket, useSingleFileAuthState } = require("@whiskeysockets/baileys");
 const app = express();
 app.use(express.json());
 
+const VERIFY_TOKEN = "123leonid456"; // тот же, что и в Meta
+const { state, saveState } = useSingleFileAuthState("./auth.json");
+
+// ✅ Webhook GET проверка от Meta
+app.get("/webhook", (req, res) => {
+  const mode = req.query["hub.mode"];
+  const token = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  if (mode === "subscribe" && token === VERIFY_TOKEN) {
+    console.log("✔️ Вебхук подтверждён!");
+    res.status(200).send(challenge);
+  } else {
+    console.warn("❌ Вебхук отклонён. Неверный токен.");
+    res.sendStatus(403);
+  }
+});
+
+// 🔄 Обработка POST (если понадобится позже)
+app.post("/webhook", (req, res) => {
+  console.log("📩 Получен POST webhook:", req.body);
+  res.sendStatus(200);
+});
+
 async function startBot() {
-  const { state, saveCreds } = await useMultiFileAuthState("./session/");
-  const { version } = await fetchLatestBaileysVersion();
-
-  const sock = makeWASocket({
-    version,
-    auth: state,
-    logger: P({ level: "silent" }),
-    printQRInTerminal: true,
-  });
-
-  sock.ev.on("creds.update", saveCreds);
-
-  sock.ev.on("messages.upsert", async ({ messages, type }) => {
-    if (type !== "notify") return;
-    const msg = messages[0];
-    if (!msg?.message) return;
-
-    const text = msg.message.conversation || msg.message.extendedTextMessage?.text;
-    const sender = msg.key.remoteJid;
-
-    console.log("📩 Получено сообщение:", sender, text);
-
-    try {
-      if (process.env.N8N_WEBHOOK_URL) {
-        await axios.post(process.env.N8N_WEBHOOK_URL, { sender, text });
-        console.log("✅ Отправлено в n8n");
-      } else {
-        console.warn("⚠️ Отсутствует переменная N8N_WEBHOOK_URL");
-      }
-    } catch (err) {
-      console.error("❌ Ошибка отправки в n8n:", err.message);
-    }
-  });
+  const sock = makeWASocket({ auth: state, printQRInTerminal: true });
+  sock.ev.on("creds.update", saveState);
 }
 
 startBot();
