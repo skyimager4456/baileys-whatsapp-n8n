@@ -1,58 +1,50 @@
+const makeWASocket = require('@whiskeysockets/baileys').default;
+const { useSingleFileAuthState } = require('@whiskeysockets/baileys/lib/auth-utils');
 const express = require('express');
-const { default: makeWASocket, useSingleFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
-const pino = require('pino');
-const qrcode = require('qrcode-terminal');
-const fs = require('fs');
 const axios = require('axios');
 
+// Авторизация Baileys
 const { state, saveState } = useSingleFileAuthState('./auth.json');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
 app.use(express.json());
 
-app.get('/webhook', (req, res) => {
-  const mode = req.query['hub.mode'];
-  const token = req.query['hub.verify_token'];
-  const challenge = req.query['hub.challenge'];
-
-  if (mode === 'subscribe' && token === '123leonid456') {
-    console.log('✅ Webhook verified');
-    res.status(200).send(challenge);
-  } else {
-    res.sendStatus(403);
-  }
-});
-
-const startSock = () => {
+async function startBot() {
+  console.log('⏳ Запускаем Baileys...');
   const sock = makeWASocket({
-    logger: pino({ level: 'silent' }),
-    printQRInTerminal: true,
     auth: state,
-  });
-
-  sock.ev.on('connection.update', (update) => {
-    const { connection, lastDisconnect, qr } = update;
-
-    if (qr) {
-      qrcode.generate(qr, { small: true });
-    }
-
-    if (connection === 'close') {
-      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-      console.log('connection closed due to', lastDisconnect?.error, ', reconnecting', shouldReconnect);
-      if (shouldReconnect) startSock();
-    } else if (connection === 'open') {
-      console.log('✅ Connected to WhatsApp');
-    }
+    printQRInTerminal: true,
   });
 
   sock.ev.on('creds.update', saveState);
-};
 
-startSock();
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (type !== 'notify') return;
+    const msg = messages[0]?.message;
+    if (!msg) return;
 
-app.listen(PORT, () => {
-  console.log(`🚀 Express запущен на порту ${PORT}`);
+    const text = msg.conversation || msg.extendedTextMessage?.text;
+    const sender = messages[0].key.remoteJid;
+
+    console.log('📩 Получено сообщение от', sender, ':', text);
+
+    try {
+      if (process.env.N8N_WEBHOOK_URL) {
+        await axios.post(process.env.N8N_WEBHOOK_URL, { sender, text });
+        console.log('✅ Сообщение отправлено в n8n');
+      } else {
+        console.warn('⚠️ Переменная окружения N8N_WEBHOOK_URL не задана!');
+      }
+    } catch (err) {
+      console.error('❌ Ошибка при отправке в n8n:', err.message);
+    }
+  });
+}
+
+startBot();
+
+// Запуск Express
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log(`🚀 Express запущен на порту ${port}`);
 });
