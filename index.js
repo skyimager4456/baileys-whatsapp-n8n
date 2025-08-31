@@ -1,69 +1,58 @@
 const express = require('express');
+const { default: makeWASocket, useSingleFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const pino = require('pino');
+const qrcode = require('qrcode-terminal');
+const fs = require('fs');
 const axios = require('axios');
-const { default: makeWASocket, useSingleFileAuthState } = require('@whiskeysockets/baileys');
 
-const app = express();
-app.use(express.json());
-
-const VERIFY_TOKEN = "123leonid456"; // токен, который указываешь в Meta
 const { state, saveState } = useSingleFileAuthState('./auth.json');
 
-console.log("⏳ Запускаем Baileys...");
+const app = express();
+const PORT = process.env.PORT || 3000;
 
-async function startBot() {
-  const sock = makeWASocket({
-    auth: state,
-    printQRInTerminal: true
-  });
+app.use(express.json());
 
-  sock.ev.on('creds.update', saveState);
+app.get('/webhook', (req, res) => {
+  const mode = req.query['hub.mode'];
+  const token = req.query['hub.verify_token'];
+  const challenge = req.query['hub.challenge'];
 
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
-    const msg = messages[0]?.message;
-    if (!msg) return;
-
-    const text = msg.conversation || msg.extendedTextMessage?.text;
-    const sender = messages[0].key.remoteJid;
-    console.log("📩 Сообщение от", sender, ":", text);
-
-    try {
-      if (process.env.N8N_WEBHOOK_URL) {
-        await axios.post(process.env.N8N_WEBHOOK_URL, { sender, text });
-        console.log("📨 Отправлено в n8n");
-      } else {
-        console.warn("⚠️ N8N_WEBHOOK_URL не задан!");
-      }
-    } catch (e) {
-      console.error("❌ Ошибка отправки в n8n:", e.message);
-    }
-  });
-}
-
-startBot();
-
-// 📌 Обработка GET-запроса от Meta (подтверждение webhook)
-app.get("/webhook", (req, res) => {
-  const mode = req.query["hub.mode"];
-  const token = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-
-  if (mode === "subscribe" && token === VERIFY_TOKEN) {
-    console.log("✅ Webhook подтверждён Meta");
+  if (mode === 'subscribe' && token === '123leonid456') {
+    console.log('✅ Webhook verified');
     res.status(200).send(challenge);
   } else {
-    console.warn("❌ Неверный токен подтверждения");
     res.sendStatus(403);
   }
 });
 
-// 📌 POST-запросы от Meta (можно обрабатывать при необходимости)
-app.post("/webhook", (req, res) => {
-  console.log("📨 Пришёл POST-запрос от Meta:", JSON.stringify(req.body, null, 2));
-  res.sendStatus(200);
-});
+const startSock = () => {
+  const sock = makeWASocket({
+    logger: pino({ level: 'silent' }),
+    printQRInTerminal: true,
+    auth: state,
+  });
 
-const PORT = process.env.PORT || 8080;
+  sock.ev.on('connection.update', (update) => {
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr) {
+      qrcode.generate(qr, { small: true });
+    }
+
+    if (connection === 'close') {
+      const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
+      console.log('connection closed due to', lastDisconnect?.error, ', reconnecting', shouldReconnect);
+      if (shouldReconnect) startSock();
+    } else if (connection === 'open') {
+      console.log('✅ Connected to WhatsApp');
+    }
+  });
+
+  sock.ev.on('creds.update', saveState);
+};
+
+startSock();
+
 app.listen(PORT, () => {
   console.log(`🚀 Express запущен на порту ${PORT}`);
 });
